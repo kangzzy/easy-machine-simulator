@@ -2,8 +2,7 @@
 
 Browser-based 3D simulator for CNC machines and robotic arms — verify work envelopes, toolpaths, and cable routing without installing anything.
 
-<!-- TODO: replace with actual screenshot -->
-<!-- ![screenshot](docs/screenshot.png) -->
+![Easy Machine Simulator](docs/screenshot.png)
 
 ## Features
 
