@@ -1,0 +1,40 @@
+{
+  "name": "5-Axis CNC Mill",
+  "type": "cnc-5axis",
+  "joints": [
+    {
+      "name": "X",
+      "type": "prismatic",
+      "axis": [1, 0, 0],
+      "limits": { "min": -200, "max": 200 }
+    },
+    {
+      "name": "Y",
+      "type": "prismatic",
+      "axis": [0, 1, 0],
+      "limits": { "min": -150, "max": 150 }
+    },
+    {
+      "name": "Z",
+      "type": "prismatic",
+      "axis": [0, 0, 1],
+      "limits": { "min": 0, "max": 300 }
+    },
+    {
+      "name": "A",
+      "type": "revolute",
+      "axis": [1, 0, 0],
+      "limits": { "min": -2.094, "max": 2.094 }
+    },
+    {
+      "name": "B",
+      "type": "revolute",
+      "axis": [0, 1, 0],
+      "limits": { "min": -2.094, "max": 2.094 }
+    }
+  ],
+  "workspaceBounds": {
+    "min": [-200, -150, 0],
+    "max": [200, 150, 300]
+  }
+}

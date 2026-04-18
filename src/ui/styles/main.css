@@ -1,0 +1,305 @@
+:root {
+  /* Dark mode (default) */
+  --panel-bg: rgba(20, 20, 35, 0.92);
+  --panel-border: rgba(80, 80, 120, 0.5);
+  --text-primary: #e0e0e0;
+  --text-secondary: #999;
+  --accent: #4a9eff;
+  --accent-hover: #6ab4ff;
+  --danger: #ff4a4a;
+  --success: #4aff7a;
+  --warning: #ffbb4a;
+  --btn-bg: rgba(60, 60, 90, 0.8);
+  --btn-hover: rgba(80, 80, 120, 0.9);
+  --input-bg: rgba(40, 40, 60, 0.8);
+  --inset-bg: rgba(30, 30, 55, 0.6);
+  --row-hover: rgba(255, 255, 255, 0.04);
+  --row-active: rgba(74, 158, 255, 0.08);
+}
+
+body.light {
+  --panel-bg: rgba(245, 245, 252, 0.96);
+  --panel-border: rgba(160, 160, 200, 0.55);
+  --text-primary: #1a1a2e;
+  --text-secondary: #5a5a78;
+  --accent: #1a6ed4;
+  --accent-hover: #2280f0;
+  --danger: #d43030;
+  --success: #1a9a40;
+  --warning: #b87000;
+  --btn-bg: rgba(215, 215, 235, 0.9);
+  --btn-hover: rgba(195, 195, 225, 1);
+  --input-bg: rgba(255, 255, 255, 0.95);
+  --inset-bg: rgba(225, 225, 245, 0.85);
+  --row-hover: rgba(0, 0, 60, 0.04);
+  --row-active: rgba(26, 110, 212, 0.08);
+}
+
+/* ─── Theme toggle button ────────────────────────────────────── */
+#theme-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 200;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  font-size: 17px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+#theme-toggle:hover { background: var(--btn-hover); transform: scale(1.08); }
+
+.panel {
+  position: fixed;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  backdrop-filter: blur(8px);
+  z-index: 100;
+}
+
+.panel h3 {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.btn {
+  background: var(--btn-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--btn-hover); }
+.btn:active { transform: scale(0.97); }
+.btn.active { border-color: var(--accent); color: var(--accent); }
+
+.btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--btn-bg);
+  border-radius: 2px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+select {
+  background: var(--btn-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+input[type="file"] {
+  display: none;
+}
+
+.file-upload-btn {
+  background: var(--btn-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  width: 100%;
+  transition: background 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-upload-btn:hover { background: var(--btn-hover); }
+
+.component-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 4px 0;
+}
+.component-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(60, 60, 90, 0.3);
+  font-size: 11px;
+  border-radius: 3px;
+}
+.component-item:hover { background: rgba(60, 60, 90, 0.3); }
+.component-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.component-item .actions { display: flex; gap: 4px; flex-shrink: 0; }
+.component-item .actions button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.component-item .actions button:hover { opacity: 0.8; }
+
+.mesh-info {
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+}
+
+.violation-log {
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 11px;
+  font-family: monospace;
+}
+.violation-log .violation-item {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(60, 60, 90, 0.5);
+}
+.violation-item.workspace { color: var(--danger); }
+.violation-item.joint-limit { color: var(--warning); }
+.violation-item.collision { color: #ff6aff; }
+
+/* Panels inside dock containers use relative positioning */
+.panel-docked {
+  position: relative !important;
+  top: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  right: auto !important;
+}
+
+/* Side dock containers */
+.dock {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+.dock > * {
+  pointer-events: auto;
+}
+
+/* ─── Inline-style overrides for light mode ──────────────────── */
+/* Inputs and selects use hardcoded dark backgrounds in JS inline styles */
+body.light input[type="number"],
+body.light input[type="text"] {
+  background: var(--input-bg) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--panel-border) !important;
+}
+body.light select {
+  background: var(--btn-bg) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--panel-border) !important;
+}
+
+/* Editor inset blocks (MachinePanel editor, CablePanel editor) */
+body.light .panel-editor {
+  background: var(--inset-bg) !important;
+  border-color: rgba(100, 100, 200, 0.18) !important;
+}
+
+/* Attach point / property blocks */
+body.light .panel-inset {
+  background: rgba(210, 210, 240, 0.5) !important;
+  border-color: rgba(120, 120, 180, 0.3) !important;
+}
+
+/* Component tree rows */
+body.light .component-item:hover { background: var(--row-hover) !important; }
+
+/* Violation log item borders */
+body.light .violation-log .violation-item {
+  border-color: rgba(160, 160, 200, 0.4) !important;
+}
+
+/* Axis gizmo canvas gets a soft shadow in light mode */
+body.light canvas[style*="bottom:12px"] {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+/* ─── Custom scrollbars ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 99px;
+  transition: background 0.15s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--panel-border) transparent;
+}
+
+.status-bar {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: monospace;
+  z-index: 10;
+  pointer-events: none;
+}

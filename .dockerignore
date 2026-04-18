@@ -1,0 +1,6 @@
+node_modules
+dist
+rust/target
+src/wasm-pkg
+*.log
+.git

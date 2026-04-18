@@ -1,0 +1,28 @@
+{
+  "name": "3-Axis CNC Mill",
+  "type": "cnc-3axis",
+  "joints": [
+    {
+      "name": "X",
+      "type": "prismatic",
+      "axis": [1, 0, 0],
+      "limits": { "min": -200, "max": 200 }
+    },
+    {
+      "name": "Y",
+      "type": "prismatic",
+      "axis": [0, 1, 0],
+      "limits": { "min": -150, "max": 150 }
+    },
+    {
+      "name": "Z",
+      "type": "prismatic",
+      "axis": [0, 0, 1],
+      "limits": { "min": 0, "max": 300 }
+    }
+  ],
+  "workspaceBounds": {
+    "min": [-200, -150, 0],
+    "max": [200, 150, 300]
+  }
+}

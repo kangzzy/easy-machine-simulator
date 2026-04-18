@@ -1,0 +1,9 @@
+[package]
+name = "ems-kinematics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ems-core = { path = "../ems-core" }
+serde = { workspace = true }
+nalgebra = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "ems-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ems-core = { path = "../ems-core" }
+ems-gcode = { path = "../ems-gcode" }
+ems-kinematics = { path = "../ems-kinematics" }
+ems-collision = { path = "../ems-collision" }
+wasm-bindgen = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"

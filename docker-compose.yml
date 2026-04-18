@@ -1,0 +1,27 @@
+services:
+  # Dev server — builds WASM + installs deps + hot-reload
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+    command: npx vite --host
+
+  # Production build + nginx serve
+  prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: serve
+    ports:
+      - "8080:80"
+    profiles:
+      - prod

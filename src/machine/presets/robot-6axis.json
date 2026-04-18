@@ -1,0 +1,52 @@
+{
+  "name": "6-Axis Robot Arm",
+  "type": "robot-6axis",
+  "joints": [
+    {
+      "name": "J1 (Base)",
+      "type": "revolute",
+      "axis": [0, 0, 1],
+      "limits": { "min": -3.14159, "max": 3.14159 },
+      "dhParams": { "theta": 0, "d": 120, "a": 0, "alpha": -1.5708 }
+    },
+    {
+      "name": "J2 (Shoulder)",
+      "type": "revolute",
+      "axis": [0, 1, 0],
+      "limits": { "min": -2.268, "max": 2.268 },
+      "dhParams": { "theta": 0, "d": 0, "a": 150, "alpha": 0 }
+    },
+    {
+      "name": "J3 (Elbow)",
+      "type": "revolute",
+      "axis": [0, 1, 0],
+      "limits": { "min": -3.4907, "max": 1.2217 },
+      "dhParams": { "theta": 0, "d": 0, "a": 130, "alpha": -1.5708 }
+    },
+    {
+      "name": "J4 (Wrist 1)",
+      "type": "revolute",
+      "axis": [0, 0, 1],
+      "limits": { "min": -6.2832, "max": 6.2832 },
+      "dhParams": { "theta": 0, "d": 100, "a": 0, "alpha": 1.5708 }
+    },
+    {
+      "name": "J5 (Wrist 2)",
+      "type": "revolute",
+      "axis": [0, 1, 0],
+      "limits": { "min": -2.094, "max": 2.094 },
+      "dhParams": { "theta": 0, "d": 0, "a": 0, "alpha": -1.5708 }
+    },
+    {
+      "name": "J6 (Wrist 3)",
+      "type": "revolute",
+      "axis": [0, 0, 1],
+      "limits": { "min": -6.2832, "max": 6.2832 },
+      "dhParams": { "theta": 0, "d": 80, "a": 0, "alpha": 0 }
+    }
+  ],
+  "workspaceBounds": {
+    "min": [-600, -600, -100],
+    "max": [600, 600, 700]
+  }
+}

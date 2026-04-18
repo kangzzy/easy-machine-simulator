@@ -1,0 +1,15 @@
+node_modules/
+dist/
+rust/target/
+src/wasm-pkg/
+*.log
+.DS_Store
+
+# Claude Code local settings (contains local paths and allowed command lists)
+.claude/
+
+# Local-only config files
+*.local.json
+*.local.env
+.env
+.env.*
