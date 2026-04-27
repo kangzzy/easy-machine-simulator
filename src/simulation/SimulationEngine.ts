@@ -6,13 +6,15 @@ import { ProjectionViews } from '../renderer/ProjectionViews';
 import { WorkerPool } from '../workers/WorkerPool';
 import { getMachinePreset } from '../machine/MachineLoader';
 import { MachineBuilder, type ComponentType, type MachineComponent } from '../machine/MachineBuilder';
+import type { Dimensions, JointMeshAsset, MeshHullMode } from '../types/deployment';
 import { CableRouter, type CableDefinition, type CableViolation } from '../machine/CableRouter';
 import { CableHandleManager } from '../machine/CableHandleManager';
 import type { MachineDefinition, MachineType } from '../types/machine';
 import type { ViolationEvent, BoundsMode, SimulationStatus } from '../types/simulation';
+import type { DeploymentCase, StrokeSpec } from '../types/deployment';
 import * as THREE from 'three';
 
-type EventName = 'stateChange' | 'frameChange' | 'toolpathLoaded' | 'machineChanged' | 'violationsUpdated' | 'cableViolation';
+type EventName = 'stateChange' | 'frameChange' | 'toolpathLoaded' | 'machineChanged' | 'violationsUpdated' | 'cableViolation' | 'caseLoaded' | 'strokeChanged';
 
 export class SimulationEngine {
   readonly animationController = new AnimationController();
@@ -33,6 +35,8 @@ export class SimulationEngine {
   private _builderMode = false;
   private cableHandleManager: CableHandleManager | null = null;
   private listeners = new Map<EventName, Set<() => void>>();
+  private _currentCaseId: string | null = null;
+  private _currentStroke: StrokeSpec | null = null;
 
   constructor(sceneManager: SceneManager) {
     this.sceneManager = sceneManager;
@@ -47,6 +51,7 @@ export class SimulationEngine {
     // Add toolpath visualizer to scene
     sceneManager.addToScene(this.toolpathVisualizer.group);
     sceneManager.addToScene(this.envelopeOverlay.group);
+    sceneManager.addToScene(this.envelopeOverlay.strokeGroup);
     sceneManager.addToScene(this.cableRouter.group);
 
     // Cable violation listener
@@ -99,6 +104,8 @@ export class SimulationEngine {
   get violations(): ViolationEvent[] { return this._violations; }
   get currentFrame(): number { return this.animationController.currentFrame; }
   get totalFrames(): number { return this.animationController.totalFrames; }
+  get currentCaseId(): string | null { return this._currentCaseId; }
+  get currentStrokeSpec(): StrokeSpec | null { return this._currentStroke ? { ...this._currentStroke } : null; }
 
   // Event system
   on(event: EventName, cb: () => void): void {
@@ -176,6 +183,52 @@ export class SimulationEngine {
     // No-op now — builder is always active
   }
 
+  // ─── Deployment cases & stage I/O ───────────────────────────
+
+  async loadCase(c: DeploymentCase): Promise<void> {
+    if (!this._builderMode) this.enableMachineBuilder();
+    await this.machineBuilder.loadSerialized(c.stage.components, c.stage.basePresetId);
+    this.setStrokeSpec(c.stroke);
+    if (c.stage.scene?.cameraPosition && c.stage.scene?.cameraTarget) {
+      this.restoreCameraState(c.stage.scene.cameraPosition, c.stage.scene.cameraTarget);
+    }
+    this._currentCaseId = c.id;
+    this.emit('machineChanged');
+    this.emit('caseLoaded');
+  }
+
+  setStrokeSpec(stroke: StrokeSpec | null): void {
+    this._currentStroke = stroke ? { ...stroke } : null;
+    this.envelopeOverlay.setStrokeEnvelope(stroke);
+    this.emit('strokeChanged');
+  }
+
+  toggleStrokeEnvelope(): void {
+    this.envelopeOverlay.toggleStrokeEnvelope();
+  }
+
+  sceneCameraState(): { cameraPosition: [number, number, number]; cameraTarget: [number, number, number] } | null {
+    const cam = this.sceneManager.camera;
+    const tgt = this.sceneManager.controls.target;
+    return {
+      cameraPosition: [cam.position.x, cam.position.y, cam.position.z],
+      cameraTarget: [tgt.x, tgt.y, tgt.z],
+    };
+  }
+
+  restoreCameraState(position: [number, number, number], target: [number, number, number]): void {
+    const cam = this.sceneManager.camera;
+    const ctrl = this.sceneManager.controls;
+    cam.position.set(position[0], position[1], position[2]);
+    ctrl.target.set(target[0], target[1], target[2]);
+    cam.lookAt(ctrl.target);
+    ctrl.update();
+  }
+
+  clearCurrentCase(): void {
+    this._currentCaseId = null;
+  }
+
   addMachineComponent(type: ComponentType, parentId?: string | null): MachineComponent {
     if (!this._builderMode) this.enableMachineBuilder();
     return this.machineBuilder.addComponent(type, parentId ?? null);
@@ -192,6 +245,22 @@ export class SimulationEngine {
 
   updateMachineComponent(id: string, updates: Partial<Pick<MachineComponent, 'name' | 'offset' | 'rotation' | 'scale' | 'axis' | 'limits' | 'jointType' | 'parentId'>>): void {
     this.machineBuilder.updateComponent(id, updates);
+  }
+
+  setDimensions(id: string, dims: Dimensions): void {
+    this.machineBuilder.setDimensions(id, dims);
+  }
+
+  async attachJointMesh(id: string, file: File, opts: { hullMode: MeshHullMode } = { hullMode: 'convex-hull' }): Promise<JointMeshAsset> {
+    return this.machineBuilder.attachJointMesh(id, file, opts);
+  }
+
+  setMeshInitialPose(id: string, offset: [number, number, number], rotation: [number, number, number]): void {
+    this.machineBuilder.setMeshInitialPose(id, offset, rotation);
+  }
+
+  removeJointMesh(id: string): void {
+    this.machineBuilder.removeJointMesh(id);
   }
 
   getMachineComponents(): MachineComponent[] {

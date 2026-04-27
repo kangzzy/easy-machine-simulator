@@ -5,6 +5,8 @@ import { ViolationLog } from './ViolationLog';
 import { ViewPanel } from './ViewPanel';
 import { JointControlPanel } from './JointControlPanel';
 import { CablePanel } from './CablePanel';
+import { DeploymentCasePanel } from './DeploymentCasePanel';
+import { applyStage, captureStage, exportStageToFile, importStageFromFile } from '../persistence/StageIO';
 import type { SimulationEngine } from '../simulation/SimulationEngine';
 
 export class UIController {
@@ -15,6 +17,7 @@ export class UIController {
   readonly viewPanel: ViewPanel;
   readonly jointControlPanel: JointControlPanel;
   readonly cablePanel: CablePanel;
+  readonly deploymentCasePanel: DeploymentCasePanel;
 
   constructor(private engine: SimulationEngine) {
     this.toolpathPanel = new ToolpathPanel(engine);
@@ -24,6 +27,7 @@ export class UIController {
     this.viewPanel = new ViewPanel(engine);
     this.jointControlPanel = new JointControlPanel(engine);
     this.cablePanel = new CablePanel(engine);
+    this.deploymentCasePanel = new DeploymentCasePanel(engine);
 
     this.setupKeyboardShortcuts();
   }
@@ -42,6 +46,7 @@ export class UIController {
     this.machinePanel.element.style.width = w;
     this.violationLog.element.style.width = w;
     this.cablePanel.element.style.width = w;
+    this.deploymentCasePanel.element.style.width = w;
 
     // Left column: panels stack from top, no gap.
     // ToolpathPanel → JointControlPanel, empty space fills below them.
@@ -50,15 +55,74 @@ export class UIController {
     leftDock.appendChild(this.jointControlPanel.element);
     container.appendChild(leftDock);
 
-    // Right column: MachinePanel stretches to fill available height (flex:1).
-    // ViolationLog and CablePanel are pinned below it — never overlap.
+    // Right column: DeploymentCasePanel on top, MachinePanel stretches to fill,
+    // ViolationLog and CablePanel pinned below it.
     const rightDock = this.makeDock('right:12px;top:50px;bottom:80px;');
+    this.deploymentCasePanel.element.style.flex = '0 0 auto';
     this.machinePanel.element.style.flex = '1';
     this.machinePanel.element.style.minHeight = '0';
+    rightDock.appendChild(this.deploymentCasePanel.element);
     rightDock.appendChild(this.machinePanel.element);
     rightDock.appendChild(this.violationLog.element);
     rightDock.appendChild(this.cablePanel.element);
     container.appendChild(rightDock);
+
+    // Stage I/O toolbar (top-left, beside ThemeToggle on right)
+    container.appendChild(this.buildStageToolbar());
+  }
+
+  private buildStageToolbar(): HTMLElement {
+    const bar = document.createElement('div');
+    bar.style.cssText = `
+      position:fixed;top:12px;left:50%;transform:translateX(-50%);
+      display:flex;gap:6px;z-index:200;
+      background:var(--panel-bg);border:1px solid var(--panel-border);
+      border-radius:6px;padding:4px 6px;backdrop-filter:blur(12px);
+    `;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn';
+    saveBtn.style.cssText = 'font-size:11px;padding:4px 10px;';
+    saveBtn.textContent = '\uD83D\uDCBE 스테이지 저장';
+    saveBtn.title = '현재 화면 구성을 JSON으로 저장 (Ctrl+S)';
+    saveBtn.addEventListener('click', () => this.saveStage());
+
+    const loadInput = document.createElement('input');
+    loadInput.type = 'file';
+    loadInput.accept = '.json';
+    loadInput.style.display = 'none';
+    loadInput.addEventListener('change', async () => {
+      const file = loadInput.files?.[0];
+      if (!file) return;
+      try {
+        const snap = await importStageFromFile(file);
+        await applyStage(this.engine, snap);
+      } catch (e: any) {
+        alert(`스테이지 불러오기 실패: ${e.message ?? e}`);
+      } finally {
+        loadInput.value = '';
+      }
+    });
+
+    const loadBtn = document.createElement('button');
+    loadBtn.className = 'btn';
+    loadBtn.style.cssText = 'font-size:11px;padding:4px 10px;';
+    loadBtn.textContent = '\uD83D\uDCC2 스테이지 불러오기';
+    loadBtn.title = 'JSON에서 화면 구성 복원 (Ctrl+O)';
+    loadBtn.addEventListener('click', () => loadInput.click());
+
+    bar.append(saveBtn, loadBtn, loadInput);
+
+    // Expose for hotkeys
+    this._stageLoadInput = loadInput;
+    return bar;
+  }
+
+  private _stageLoadInput: HTMLInputElement | null = null;
+
+  private saveStage(): void {
+    const snap = captureStage(this.engine);
+    exportStageToFile(snap);
   }
 
   private makeDock(position: string): HTMLDivElement {
@@ -70,7 +134,19 @@ export class UIController {
 
   private setupKeyboardShortcuts(): void {
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      // Ctrl+S / Ctrl+O always work, even when focus is in inputs
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') {
+        e.preventDefault();
+        this.saveStage();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyO') {
+        e.preventDefault();
+        this._stageLoadInput?.click();
+        return;
+      }
+
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
 
       switch (e.code) {
         case 'Space':
@@ -95,6 +171,9 @@ export class UIController {
           break;
         case 'KeyE':
           this.engine.toggleEnvelopeOverlay();
+          break;
+        case 'KeyS':
+          this.engine.toggleStrokeEnvelope();
           break;
         case 'KeyF':
           this.engine.fitAll();

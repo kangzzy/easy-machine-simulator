@@ -1,6 +1,7 @@
 import type { SimulationEngine } from '../simulation/SimulationEngine';
 import type { MachineType } from '../types/machine';
-import type { ComponentType, MachineComponent } from '../machine/MachineBuilder';
+import { supportsDimensions, type ComponentType, type MachineComponent } from '../machine/MachineBuilder';
+import type { MeshHullMode } from '../types/deployment';
 import { makeCollapsiblePanel } from './panelUtils';
 
 const COMP_TYPES: { type: ComponentType; icon: string; label: string; color: string }[] = [
@@ -480,7 +481,158 @@ export class MachinePanel {
       ed.appendChild(mi);
     }
 
+    if (supportsDimensions(comp.type)) {
+      ed.appendChild(this.dimensionsBlock(comp));
+    }
+
+    ed.appendChild(this.jointMeshBlock(comp));
+
     return ed;
+  }
+
+  // ─── Sizable component (Width/Depth/Height) ────────────────────────
+
+  private dimensionsBlock(comp: MachineComponent): HTMLDivElement {
+    const block = document.createElement('div');
+    block.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(60,60,90,0.3);';
+    block.appendChild(this.sectionLabel('치수 (mm)'));
+
+    const cur = comp.dimensions ?? { width: 100, depth: 100, height: 50 };
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:4px;';
+    const labels = ['W', 'D', 'H'];
+    const keys: Array<'width' | 'depth' | 'height'> = ['width', 'depth', 'height'];
+    const colors = ['#f6a', '#6af', '#af6'];
+    const state = { ...cur };
+
+    for (let i = 0; i < 3; i++) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'flex:1;';
+      const lbl = document.createElement('div');
+      lbl.style.cssText = `font-size:9px;color:${colors[i]};font-weight:bold;margin-bottom:1px;text-align:center;`;
+      lbl.textContent = labels[i];
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1'; inp.step = '1';
+      inp.value = String(Math.round(state[keys[i]]));
+      inp.style.cssText = `
+        width:100%;background:var(--input-bg);border:1px solid ${colors[i]}30;
+        border-radius:3px;color:var(--text-primary);padding:3px 4px;
+        font-size:11px;font-family:monospace;text-align:center;
+      `;
+      const k = keys[i];
+      inp.addEventListener('change', () => {
+        state[k] = Math.max(1, parseFloat(inp.value) || state[k]);
+        this.engine.setDimensions(comp.id, { ...state });
+      });
+      wrap.append(lbl, inp);
+      row.appendChild(wrap);
+    }
+    block.appendChild(row);
+    return block;
+  }
+
+  // ─── Per-joint mesh attachment ─────────────────────────────────────
+
+  private jointMeshBlock(comp: MachineComponent): HTMLDivElement {
+    const block = document.createElement('div');
+    block.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(60,60,90,0.3);';
+    block.appendChild(this.sectionLabel('관절 모델 첨부'));
+
+    if (comp.meshAsset) {
+      const info = document.createElement('div');
+      info.style.cssText = 'font-size:10px;color:var(--text-secondary);margin-bottom:4px;line-height:1.4;';
+      info.innerHTML = `<b style="color:var(--text-primary);">${escapeHtml(comp.meshAsset.fileName)}</b><br>` +
+        `${comp.meshAsset.triangleCount} tris · ${hullModeLabel(comp.meshAsset.hullMode)}`;
+      block.appendChild(info);
+
+      block.appendChild(this.sectionLabel('초기 위치 (mm)'));
+      block.appendChild(this.vec3Row(comp.meshAsset.initialOffset, -2000, 2000, 1, (v) => {
+        if (!comp.meshAsset) return;
+        comp.meshAsset.initialOffset = v;
+        this.engine.setMeshInitialPose(comp.id, v, comp.meshAsset.initialRotation);
+      }));
+
+      block.appendChild(this.sectionLabel('초기 자세 (도)'));
+      block.appendChild(this.vec3Row(comp.meshAsset.initialRotation, -360, 360, 1, (v) => {
+        if (!comp.meshAsset) return;
+        comp.meshAsset.initialRotation = v;
+        this.engine.setMeshInitialPose(comp.id, comp.meshAsset.initialOffset, v);
+      }));
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'btn';
+      removeBtn.style.cssText = 'width:100%;margin-top:6px;font-size:11px;background:rgba(255,74,74,0.1);border:1px solid rgba(255,74,74,0.3);color:var(--danger);';
+      removeBtn.textContent = '모델 제거';
+      removeBtn.addEventListener('click', () => {
+        this.engine.removeJointMesh(comp.id);
+        this.refreshComponentList();
+      });
+      block.appendChild(removeBtn);
+    } else {
+      const hint = document.createElement('div');
+      hint.style.cssText = 'font-size:10px;color:var(--text-secondary);margin-bottom:4px;';
+      hint.textContent = '.stl / .step / .obj / .glb 파일 첨부';
+      block.appendChild(hint);
+
+      const modeRow = document.createElement('div');
+      modeRow.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;';
+      const modes: Array<{ value: 'convex-hull' | 'decimated' | 'none'; label: string; title: string }> = [
+        { value: 'convex-hull', label: '외피만', title: '컨벡스 헐로 변환 — 가장 가벼움 (추천)' },
+        { value: 'decimated', label: '데시메이션', title: '원본 형상 유지, 삼각형만 감소' },
+        { value: 'none', label: '원본', title: '데시메이션만 적용 (기본)' },
+      ];
+      let selectedMode: 'convex-hull' | 'decimated' | 'none' = 'convex-hull';
+      const buttons: HTMLButtonElement[] = [];
+      for (const m of modes) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.title = m.title;
+        b.textContent = m.label;
+        b.style.cssText = 'flex:1;padding:3px 6px;font-size:10px;';
+        b.addEventListener('click', () => {
+          selectedMode = m.value;
+          for (const bb of buttons) bb.style.borderColor = 'var(--panel-border)';
+          b.style.borderColor = 'var(--accent)';
+        });
+        buttons.push(b);
+        modeRow.appendChild(b);
+      }
+      buttons[0].style.borderColor = 'var(--accent)';
+      block.appendChild(modeRow);
+
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.stl,.step,.stp,.obj,.glb,.gltf';
+      fileInput.style.display = 'none';
+      const status = document.createElement('div');
+      status.style.cssText = 'font-size:10px;color:var(--text-secondary);margin-top:4px;min-height:14px;';
+
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) return;
+        status.textContent = `로딩 중: ${file.name}…`;
+        try {
+          await this.engine.attachJointMesh(comp.id, file, { hullMode: selectedMode });
+          status.textContent = '';
+          this.refreshComponentList();
+        } catch (e: any) {
+          status.textContent = `실패: ${e.message ?? e}`;
+        } finally {
+          fileInput.value = '';
+        }
+      });
+
+      const uploadBtn = document.createElement('button');
+      uploadBtn.className = 'btn';
+      uploadBtn.style.cssText = 'width:100%;font-size:11px;';
+      uploadBtn.textContent = '파일 첨부';
+      uploadBtn.addEventListener('click', () => fileInput.click());
+      block.append(uploadBtn, fileInput, status);
+    }
+
+    return block;
   }
 
   // ============================================================
@@ -563,4 +715,16 @@ export class MachinePanel {
     row.append(lbl, sel);
     return row;
   }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]!));
+}
+
+function hullModeLabel(m: MeshHullMode): string {
+  if (m === 'convex-hull') return '외피만 (convex hull)';
+  if (m === 'decimated') return '데시메이션';
+  return '원본';
 }

@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { loadModelFile, type ModelInfo } from './ModelLoader';
+import { applyHullMode, exportGroupToGlbBase64, importGroupFromGlbBase64, countTriangles } from './MeshHull';
 import type { WorkspaceBounds } from '../types/machine';
+import type {
+  Dimensions,
+  JointMeshAsset,
+  MeshHullMode,
+  SerializedComponent,
+} from '../types/deployment';
 
 export type ComponentType =
   | 'linear-axis'
@@ -11,6 +18,8 @@ export type ComponentType =
   | 'spindle'
   | 'end-effector'
   | 'custom-mesh';
+
+const ATTACHED_MESH_NAME = '__attached_joint_mesh__';
 
 export interface MachineComponent {
   id: string;
@@ -26,6 +35,8 @@ export interface MachineComponent {
   limits: { min: number; max: number };
   jointType: 'prismatic' | 'revolute' | 'fixed';
   jointValue: number;                     // current joint value (mm or rad)
+  dimensions?: Dimensions;                // present for turntable/rotary-axis/rail when sized
+  meshAsset?: JointMeshAsset;             // user-uploaded per-joint model (.stl/.step/etc.)
 }
 
 let nextId = 1;
@@ -34,6 +45,7 @@ export class MachineBuilder {
   private components = new Map<string, MachineComponent>();
   readonly rootGroup: THREE.Group;
   private onChange: (() => void) | null = null;
+  private _lastPresetId: 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis' | 'custom' = 'cnc-3axis';
 
   constructor() {
     this.rootGroup = new THREE.Group();
@@ -43,10 +55,12 @@ export class MachineBuilder {
   setOnChange(cb: () => void): void { this.onChange = cb; }
   getComponents(): MachineComponent[] { return Array.from(this.components.values()); }
   getComponent(id: string): MachineComponent | undefined { return this.components.get(id); }
+  get lastPresetId(): string { return this._lastPresetId; }
 
   // ─── Presets ────────────────────────────────────────────────
 
   loadPreset(type: 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis'): void {
+    this._lastPresetId = type;
     this.clear();
     const M = presetMeshes; // shorthand
 
@@ -189,6 +203,230 @@ export class MachineBuilder {
     }
     this.rebuildSceneGraph();
     this.onChange?.();
+  }
+
+  // ─── Sizable components (turntable / rotary-axis / rail) ────
+
+  setDimensions(id: string, dims: Dimensions): void {
+    const comp = this.components.get(id);
+    if (!comp) return;
+    if (!supportsDimensions(comp.type)) return;
+    comp.dimensions = { ...dims };
+    this.rebuildBaseMesh(comp);
+    this.rebuildSceneGraph();
+    this.onChange?.();
+  }
+
+  // ─── Per-joint mesh attachment ──────────────────────────────
+
+  async attachJointMesh(id: string, file: File, opts: { hullMode: MeshHullMode } = { hullMode: 'convex-hull' }): Promise<JointMeshAsset> {
+    const comp = this.components.get(id);
+    if (!comp) throw new Error(`Component ${id} not found`);
+
+    const { mesh: loaded } = await loadModelFile(file);
+    const processed = applyHullMode(loaded, opts.hullMode);
+    const triangleCount = countTriangles(processed);
+
+    processed.name = ATTACHED_MESH_NAME;
+    processed.position.set(0, 0, 0);
+    processed.rotation.set(0, 0, 0);
+
+    this.removeAttachedMesh(comp);
+    comp.mesh.add(processed);
+
+    const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    const format: JointMeshAsset['format'] =
+      ext === 'stl' ? 'stl' :
+      ext === 'step' || ext === 'stp' ? 'step' :
+      ext === 'obj' ? 'obj' : 'glb';
+
+    const glbBase64 = await exportGroupToGlbBase64(processed);
+
+    const asset: JointMeshAsset = {
+      fileName: file.name,
+      format,
+      hullMode: opts.hullMode,
+      triangleCount,
+      glbBase64,
+      initialOffset: [0, 0, 0],
+      initialRotation: [0, 0, 0],
+    };
+    comp.meshAsset = asset;
+
+    this.rebuildSceneGraph();
+    this.onChange?.();
+    return asset;
+  }
+
+  setMeshInitialPose(id: string, offset: [number, number, number], rotation: [number, number, number]): void {
+    const comp = this.components.get(id);
+    if (!comp || !comp.meshAsset) return;
+    comp.meshAsset.initialOffset = [...offset];
+    comp.meshAsset.initialRotation = [...rotation];
+    this.applyAttachedMeshPose(comp);
+    this.onChange?.();
+  }
+
+  removeJointMesh(id: string): void {
+    const comp = this.components.get(id);
+    if (!comp) return;
+    this.removeAttachedMesh(comp);
+    comp.meshAsset = undefined;
+    this.rebuildSceneGraph();
+    this.onChange?.();
+  }
+
+  // ─── Serialization ──────────────────────────────────────────
+
+  serialize(): SerializedComponent[] {
+    return Array.from(this.components.values()).map(c => ({
+      id: c.id,
+      type: c.type,
+      name: c.name,
+      parentId: c.parentId,
+      offset: [...c.offset] as [number, number, number],
+      rotation: [...c.rotation] as [number, number, number],
+      scale: c.scale,
+      axis: [...c.axis] as [number, number, number],
+      limits: { ...c.limits },
+      jointType: c.jointType,
+      jointValue: c.jointValue,
+      ...(c.dimensions ? { dimensions: { ...c.dimensions } } : {}),
+      ...(c.meshAsset ? { meshAsset: { ...c.meshAsset, initialOffset: [...c.meshAsset.initialOffset] as [number, number, number], initialRotation: [...c.meshAsset.initialRotation] as [number, number, number] } } : {}),
+    }));
+  }
+
+  /**
+   * Replace the current scene with a serialized component graph.
+   * Strategy:
+   *  - If basePresetId is a known preset, call loadPreset() to recreate procedural meshes,
+   *    then patch the matching component fields by id.
+   *  - Components not present in the preset (e.g. user-added rotary tables) are added
+   *    as fresh components via addComponent() so they get default meshes that can then
+   *    be re-sized via dimensions.
+   *  - Reattach saved per-joint meshes by decoding the embedded GLB.
+   */
+  async loadSerialized(comps: SerializedComponent[], basePresetId: string): Promise<void> {
+    const isPreset = basePresetId === 'cnc-3axis' || basePresetId === 'cnc-5axis' || basePresetId === 'robot-6axis';
+    if (isPreset) {
+      this.loadPreset(basePresetId as 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis');
+    } else {
+      this.clear();
+      this._lastPresetId = 'custom';
+    }
+
+    const existingByName = new Map<string, MachineComponent>();
+    for (const c of this.components.values()) existingByName.set(`${c.type}:${c.name}`, c);
+    const idMap = new Map<string, string>();
+
+    const sortedRoots = comps.filter(c => c.parentId === null);
+    const order: SerializedComponent[] = [];
+    const seen = new Set<string>();
+    const visit = (c: SerializedComponent) => {
+      if (seen.has(c.id)) return;
+      seen.add(c.id);
+      order.push(c);
+      for (const child of comps.filter(x => x.parentId === c.id)) visit(child);
+    };
+    for (const r of sortedRoots) visit(r);
+    for (const c of comps) if (!seen.has(c.id)) visit(c);
+
+    for (const sc of order) {
+      const presetMatch = existingByName.get(`${sc.type}:${sc.name}`);
+      let target: MachineComponent;
+      if (presetMatch && !idMap.has(sc.id)) {
+        target = presetMatch;
+        existingByName.delete(`${sc.type}:${sc.name}`);
+      } else {
+        const mappedParent = sc.parentId ? (idMap.get(sc.parentId) ?? null) : null;
+        target = this.addComponent(sc.type, mappedParent);
+        target.name = sc.name;
+      }
+      idMap.set(sc.id, target.id);
+
+      target.offset = [...sc.offset] as [number, number, number];
+      target.rotation = [...sc.rotation] as [number, number, number];
+      target.scale = sc.scale;
+      target.axis = [...sc.axis] as [number, number, number];
+      target.limits = { ...sc.limits };
+      target.jointType = sc.jointType;
+      target.jointValue = sc.jointValue;
+
+      const mappedParent = sc.parentId ? (idMap.get(sc.parentId) ?? null) : null;
+      target.parentId = mappedParent;
+
+      if (sc.dimensions && supportsDimensions(target.type)) {
+        target.dimensions = { ...sc.dimensions };
+        this.rebuildBaseMesh(target);
+      }
+
+      if (sc.meshAsset) {
+        try {
+          const decoded = await importGroupFromGlbBase64(sc.meshAsset.glbBase64);
+          decoded.name = ATTACHED_MESH_NAME;
+          this.removeAttachedMesh(target);
+          target.mesh.add(decoded);
+          target.meshAsset = {
+            ...sc.meshAsset,
+            initialOffset: [...sc.meshAsset.initialOffset] as [number, number, number],
+            initialRotation: [...sc.meshAsset.initialRotation] as [number, number, number],
+          };
+          this.applyAttachedMeshPose(target);
+        } catch (e) {
+          console.error('Failed to decode joint mesh asset for', sc.name, e);
+        }
+      }
+    }
+
+    this.rebuildSceneGraph();
+    this.onChange?.();
+  }
+
+  // ─── Mesh helpers (private) ─────────────────────────────────
+
+  private rebuildBaseMesh(comp: MachineComponent): void {
+    if (!supportsDimensions(comp.type) || !comp.dimensions) return;
+    const newMesh = buildSizedMesh(comp.type, comp.dimensions);
+    if (!newMesh) return;
+
+    const attached = comp.mesh.getObjectByName(ATTACHED_MESH_NAME);
+    comp.mesh.removeFromParent();
+    comp.mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.name !== ATTACHED_MESH_NAME) {
+        child.geometry?.dispose();
+        const m = child.material;
+        if (Array.isArray(m)) m.forEach(x => x.dispose()); else m?.dispose();
+      }
+    });
+    while (comp.mesh.children.length > 0) comp.mesh.remove(comp.mesh.children[0]);
+    for (const child of newMesh.children.slice()) comp.mesh.add(child);
+    if (attached) comp.mesh.add(attached);
+    comp.mesh.name = comp.id;
+  }
+
+  private removeAttachedMesh(comp: MachineComponent): void {
+    const existing = comp.mesh.getObjectByName(ATTACHED_MESH_NAME);
+    if (!existing) return;
+    existing.removeFromParent();
+    existing.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry?.dispose();
+        const m = child.material;
+        if (Array.isArray(m)) m.forEach(x => x.dispose()); else m?.dispose();
+      }
+    });
+  }
+
+  private applyAttachedMeshPose(comp: MachineComponent): void {
+    const attached = comp.mesh.getObjectByName(ATTACHED_MESH_NAME);
+    if (!attached || !comp.meshAsset) return;
+    const deg2rad = Math.PI / 180;
+    attached.position.set(...comp.meshAsset.initialOffset);
+    attached.rotation.set(
+      comp.meshAsset.initialRotation[0] * deg2rad,
+      comp.meshAsset.initialRotation[1] * deg2rad,
+      comp.meshAsset.initialRotation[2] * deg2rad,
+    );
   }
 
   updateComponent(id: string, updates: Partial<Pick<MachineComponent, 'name'|'offset'|'rotation'|'scale'|'axis'|'limits'|'jointType'|'parentId'>>): void {
@@ -494,3 +732,71 @@ const componentTemplates: Record<ComponentType, ComponentTemplate> = {
     defaultJointType: 'fixed', defaultYOffset: 0, buildMesh: () => new THREE.Group(),
   },
 };
+
+// ─── Sizable component helpers ─────────────────────────────────
+
+export function supportsDimensions(type: ComponentType): boolean {
+  return type === 'turntable' || type === 'rotary-axis' || type === 'rail';
+}
+
+function buildSizedMesh(type: ComponentType, dims: Dimensions): THREE.Group | null {
+  const w = Math.max(1, dims.width);
+  const d = Math.max(1, dims.depth);
+  const h = Math.max(1, dims.height);
+
+  if (type === 'turntable') {
+    const g = new THREE.Group();
+    const radius = Math.max(w, d) / 2;
+    const baseR = radius * 1.05;
+    const baseH = Math.max(2, h * 0.4);
+    const topH = Math.max(1, h - baseH);
+    g.add(new THREE.Mesh(
+      new THREE.CylinderGeometry(baseR, baseR, baseH, 32),
+      new THREE.MeshStandardMaterial({ color: 0x556677, metalness: 0.6, roughness: 0.4 })
+    ));
+    const top = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, topH, 32),
+      new THREE.MeshStandardMaterial({ color: 0x7799aa, metalness: 0.4, roughness: 0.6 })
+    );
+    top.position.y = (baseH + topH) / 2;
+    g.add(top);
+    return g;
+  }
+  if (type === 'rotary-axis') {
+    const g = new THREE.Group();
+    const radius = Math.max(w, d) / 2;
+    g.add(new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius * 1.05, h, 32),
+      new THREE.MeshStandardMaterial({ color: 0xd4a574, metalness: 0.5, roughness: 0.5 })
+    ));
+    const arrow = new THREE.Mesh(
+      new THREE.ConeGeometry(Math.max(2, radius * 0.1), Math.max(6, radius * 0.3), 8),
+      new THREE.MeshStandardMaterial({ color: 0xff6644 }),
+    );
+    arrow.position.set(radius * 0.8, h * 0.5, 0);
+    arrow.rotation.z = -Math.PI / 2;
+    g.add(arrow);
+    return g;
+  }
+  if (type === 'rail') {
+    const g = new THREE.Group();
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.7, roughness: 0.3 });
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), railMat));
+    const guideH = Math.max(2, h * 0.3);
+    const guideD = Math.max(2, d * 0.15);
+    const g1 = new THREE.Mesh(new THREE.BoxGeometry(w, guideH, guideD), railMat);
+    g1.position.set(0, h / 2 + guideH / 2, d / 2 - guideD / 2);
+    g.add(g1);
+    const g2 = new THREE.Mesh(new THREE.BoxGeometry(w, guideH, guideD), railMat);
+    g2.position.set(0, h / 2 + guideH / 2, -(d / 2 - guideD / 2));
+    g.add(g2);
+    const carriage = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(20, w * 0.08), Math.max(8, h * 0.6), Math.max(20, d * 0.6)),
+      new THREE.MeshStandardMaterial({ color: 0x88aacc, metalness: 0.5, roughness: 0.5 })
+    );
+    carriage.position.y = h / 2 + guideH + 4;
+    g.add(carriage);
+    return g;
+  }
+  return null;
+}
