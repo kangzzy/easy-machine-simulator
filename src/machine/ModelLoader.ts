@@ -3,14 +3,21 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const MAX_TRIANGLES = 10000;
 const DEFAULT_COLOR = 0x8899aa;
 
+export interface LoadModelOptions {
+  /** When set, decimate any mesh with more than this many triangles. Skip for full fidelity. */
+  decimateTo?: number;
+}
+
 /**
- * Load a 3D model file and return a simplified Three.js mesh.
- * Supports: STL, OBJ, GLB/GLTF, STEP/STP (via occt-import-js)
+ * Load a 3D model file and return a Three.js group.
+ * Supports: STL, OBJ, GLB/GLTF, STEP/STP (via occt-import-js).
+ *
+ * By default the geometry is returned at full fidelity. Pass
+ * `{ decimateTo: N }` to apply a vertex-stride decimation cap.
  */
-export async function loadModelFile(file: File): Promise<{ mesh: THREE.Group; info: ModelInfo }> {
+export async function loadModelFile(file: File, opts: LoadModelOptions = {}): Promise<{ mesh: THREE.Group; info: ModelInfo }> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
   let geometry: THREE.BufferGeometry | null = null;
   let group: THREE.Group | null = null;
@@ -43,14 +50,15 @@ export async function loadModelFile(file: File): Promise<{ mesh: THREE.Group; in
 
   // Build group from single geometry if needed
   if (geometry && !group) {
-    const decimated = decimateGeometry(geometry, MAX_TRIANGLES);
+    const finalGeom = opts.decimateTo ? decimateGeometry(geometry, opts.decimateTo) : geometry;
+    if (!finalGeom.getAttribute('normal')) finalGeom.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({
       color: DEFAULT_COLOR,
       metalness: 0.4,
       roughness: 0.6,
       side: THREE.DoubleSide,
     });
-    const mesh = new THREE.Mesh(decimated, mat);
+    const mesh = new THREE.Mesh(finalGeom, mat);
     group = new THREE.Group();
     group.add(mesh);
   }
@@ -59,12 +67,21 @@ export async function loadModelFile(file: File): Promise<{ mesh: THREE.Group; in
     group = new THREE.Group();
   }
 
-  // Decimate all child meshes in group
-  group.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.geometry) {
-      child.geometry = decimateGeometry(child.geometry, MAX_TRIANGLES);
-    }
-  });
+  // Optional decimation pass for child meshes (only when caller opted in)
+  if (opts.decimateTo) {
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry) {
+        child.geometry = decimateGeometry(child.geometry, opts.decimateTo!);
+      }
+    });
+  } else {
+    // Ensure shading is correct for any meshes lacking normals.
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.geometry && !child.geometry.getAttribute('normal')) {
+        child.geometry.computeVertexNormals();
+      }
+    });
+  }
 
   // Compute info
   let totalTriangles = 0;
@@ -77,13 +94,12 @@ export async function loadModelFile(file: File): Promise<{ mesh: THREE.Group; in
     }
   });
 
-  // Center and normalize scale
+  // Compute size info but do NOT recenter — preserve the file's coordinate
+  // origin so that joint-axis-aligned models (typical for robot link STLs)
+  // attach at the correct pivot. Users can adjust via initialOffset.
   const box = new THREE.Box3().setFromObject(group);
-  const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-
-  group.position.sub(center);
 
   const info: ModelInfo = {
     name: file.name,
@@ -106,6 +122,7 @@ export interface ModelInfo {
 
 /**
  * Simple vertex-stride decimation: keep every Nth vertex to hit target triangle count.
+ * Lossy and silhouette-destroying — only call when explicitly requested.
  */
 function decimateGeometry(geometry: THREE.BufferGeometry, maxTriangles: number): THREE.BufferGeometry {
   geometry.computeVertexNormals();
@@ -120,7 +137,6 @@ function decimateGeometry(geometry: THREE.BufferGeometry, maxTriangles: number):
 
   if (currentTriangles <= maxTriangles) return geometry;
 
-  // Merge vertices first for better decimation
   geometry = geometry.toNonIndexed();
   const positions = geometry.getAttribute('position');
   const triCount = positions.count / 3;
@@ -172,9 +188,10 @@ async function loadGLTF(buffer: ArrayBuffer): Promise<THREE.Group> {
 async function loadSTEP(data: Uint8Array): Promise<THREE.BufferGeometry> {
   try {
     const occt = await import('occt-import-js');
-    const result = await (occt as any).default().then((oc: any) => {
-      return oc.ReadStepFile(data, null);
+    const oc = await (occt as any).default({
+      locateFile: (path: string) => (path.endsWith('.wasm') ? '/occt-import-js.wasm' : path),
     });
+    const result = oc.ReadStepFile(data, null);
 
     if (!result.success || result.meshes.length === 0) {
       throw new Error('Failed to parse STEP file');

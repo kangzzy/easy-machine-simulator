@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { loadModelFile, type ModelInfo } from './ModelLoader';
-import { applyHullMode, exportGroupToGlbBase64, importGroupFromGlbBase64, countTriangles } from './MeshHull';
+import { exportGroupToGlbBase64, importGroupFromGlbBase64 } from './MeshHull';
+import { processModelFile } from './ModelProcessor';
 import type { WorkspaceBounds } from '../types/machine';
 import type {
   Dimensions,
@@ -45,6 +46,7 @@ export class MachineBuilder {
   private components = new Map<string, MachineComponent>();
   readonly rootGroup: THREE.Group;
   private onChange: (() => void) | null = null;
+  private _silent = false;
   private _lastPresetId: 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis' | 'custom' = 'cnc-3axis';
 
   constructor() {
@@ -53,6 +55,22 @@ export class MachineBuilder {
   }
 
   setOnChange(cb: () => void): void { this.onChange = cb; }
+
+  private emitChange(): void {
+    if (this._silent) return;
+    this.onChange?.();
+  }
+
+  /** Run a batch of mutations without firing onChange for each one. */
+  private batch<T>(fn: () => T): T {
+    const wasSilent = this._silent;
+    this._silent = true;
+    try {
+      return fn();
+    } finally {
+      this._silent = wasSilent;
+    }
+  }
   getComponents(): MachineComponent[] { return Array.from(this.components.values()); }
   getComponent(id: string): MachineComponent | undefined { return this.components.get(id); }
   get lastPresetId(): string { return this._lastPresetId; }
@@ -61,7 +79,14 @@ export class MachineBuilder {
 
   loadPreset(type: 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis'): void {
     this._lastPresetId = type;
-    this.clear();
+    this.batch(() => {
+      this.clear();
+      this.populatePreset(type);
+    });
+    this.emitChange();
+  }
+
+  private populatePreset(type: 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis'): void {
     const M = presetMeshes; // shorthand
 
     switch (type) {
@@ -164,7 +189,7 @@ export class MachineBuilder {
     };
     this.components.set(id, comp);
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
     return comp;
   }
 
@@ -181,28 +206,31 @@ export class MachineBuilder {
     };
     this.components.set(id, comp);
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
     return comp;
   }
 
   removeComponent(id: string): void {
+    const root = this.components.get(id);
     const toRemove = [...this.getDescendants(id), id];
-    for (const rid of toRemove) {
-      const comp = this.components.get(rid);
-      if (comp) {
-        comp.mesh.removeFromParent();
-        comp.mesh.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry?.dispose();
-            const m = child.material;
-            if (Array.isArray(m)) m.forEach(x => x.dispose()); else m?.dispose();
-          }
-        });
+    if (root) {
+      // Detach children-as-components first so disposing the root subtree doesn't
+      // also dispose meshes owned by other entries in the components map.
+      for (const childId of this.getDescendants(id)) {
+        const child = this.components.get(childId);
+        child?.mesh.removeFromParent();
       }
-      this.components.delete(rid);
+      root.mesh.removeFromParent();
+      disposeSubtree(root.mesh);
+      // Now dispose each detached descendant mesh exactly once.
+      for (const childId of this.getDescendants(id)) {
+        const child = this.components.get(childId);
+        if (child) disposeSubtree(child.mesh);
+      }
     }
+    for (const rid of toRemove) this.components.delete(rid);
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
   }
 
   // ─── Sizable components (turntable / rotary-axis / rail) ────
@@ -214,7 +242,7 @@ export class MachineBuilder {
     comp.dimensions = { ...dims };
     this.rebuildBaseMesh(comp);
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
   }
 
   // ─── Per-joint mesh attachment ──────────────────────────────
@@ -223,16 +251,18 @@ export class MachineBuilder {
     const comp = this.components.get(id);
     if (!comp) throw new Error(`Component ${id} not found`);
 
-    const { mesh: loaded } = await loadModelFile(file);
-    const processed = applyHullMode(loaded, opts.hullMode);
-    const triangleCount = countTriangles(processed);
+    // Heavy work (parse + simplify/hull) runs in a Web Worker so the UI never freezes.
+    const processedResult = await processModelFile(file, { hullMode: opts.hullMode });
+    const processed = processedResult.group;
+    if (processedResult.triangleCount === 0) {
+      throw new Error('모델에서 삼각형을 추출하지 못했습니다 (다른 모드를 시도해 보세요).');
+    }
 
     processed.name = ATTACHED_MESH_NAME;
-    processed.position.set(0, 0, 0);
-    processed.rotation.set(0, 0, 0);
 
     this.removeAttachedMesh(comp);
     comp.mesh.add(processed);
+    this.applyAttachedMeshPose(comp);
 
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
     const format: JointMeshAsset['format'] =
@@ -240,7 +270,9 @@ export class MachineBuilder {
       ext === 'step' || ext === 'stp' ? 'step' :
       ext === 'obj' ? 'obj' : 'glb';
 
+    await yieldToUI();
     const glbBase64 = await exportGroupToGlbBase64(processed);
+    const triangleCount = processedResult.triangleCount;
 
     const asset: JointMeshAsset = {
       fileName: file.name,
@@ -254,7 +286,7 @@ export class MachineBuilder {
     comp.meshAsset = asset;
 
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
     return asset;
   }
 
@@ -264,7 +296,7 @@ export class MachineBuilder {
     comp.meshAsset.initialOffset = [...offset];
     comp.meshAsset.initialRotation = [...rotation];
     this.applyAttachedMeshPose(comp);
-    this.onChange?.();
+    this.emitChange();
   }
 
   removeJointMesh(id: string): void {
@@ -273,7 +305,7 @@ export class MachineBuilder {
     this.removeAttachedMesh(comp);
     comp.meshAsset = undefined;
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
   }
 
   // ─── Serialization ──────────────────────────────────────────
@@ -307,6 +339,17 @@ export class MachineBuilder {
    *  - Reattach saved per-joint meshes by decoding the embedded GLB.
    */
   async loadSerialized(comps: SerializedComponent[], basePresetId: string): Promise<void> {
+    const wasSilent = this._silent;
+    this._silent = true;
+    try {
+      await this.loadSerializedInner(comps, basePresetId);
+    } finally {
+      this._silent = wasSilent;
+    }
+    this.emitChange();
+  }
+
+  private async loadSerializedInner(comps: SerializedComponent[], basePresetId: string): Promise<void> {
     const isPreset = basePresetId === 'cnc-3axis' || basePresetId === 'cnc-5axis' || basePresetId === 'robot-6axis';
     if (isPreset) {
       this.loadPreset(basePresetId as 'cnc-3axis' | 'cnc-5axis' | 'robot-6axis');
@@ -379,7 +422,7 @@ export class MachineBuilder {
     }
 
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
   }
 
   // ─── Mesh helpers (private) ─────────────────────────────────
@@ -434,7 +477,7 @@ export class MachineBuilder {
     if (!comp) return;
     Object.assign(comp, updates);
     this.rebuildSceneGraph();
-    this.onChange?.();
+    this.emitChange();
   }
 
   // ─── Joint Values & Kinematics ──────────────────────────────
@@ -520,7 +563,21 @@ export class MachineBuilder {
   }
 
   clear(): void {
-    for (const id of Array.from(this.components.keys())) this.removeComponent(id);
+    // Detach root components from rootGroup, then dispose every component's
+    // own mesh exactly once. (We can't rely on cascading dispose via the scene
+    // graph because each component owns its own THREE.Group whose children include
+    // other components' groups — a single traverse would dispose meshes that the
+    // next iteration still expects to dispose, double-freeing materials and
+    // corrupting Three.js's program cache.)
+    for (const comp of this.components.values()) {
+      comp.mesh.removeFromParent();
+    }
+    for (const comp of this.components.values()) {
+      disposeSubtree(comp.mesh);
+    }
+    this.components.clear();
+    while (this.rootGroup.children.length > 0) this.rootGroup.remove(this.rootGroup.children[0]);
+    this.emitChange();
   }
 }
 
@@ -732,6 +789,37 @@ const componentTemplates: Record<ComponentType, ComponentTemplate> = {
     defaultJointType: 'fixed', defaultYOffset: 0, buildMesh: () => new THREE.Group(),
   },
 };
+
+// ─── Mesh baking helper ───────────────────────────────────────
+
+/**
+ * Bake the loaded group's world transforms into each mesh's geometry, then
+ * recenter the whole thing at the origin. After this call the group sits at
+ * (0,0,0) with identity rotation/scale and the geometry vertices ARE the
+ * intended positions — so applying initialOffset/initialRotation later places
+ * the mesh predictably regardless of how the loader laid out the original.
+ *
+ * Without this, the 'decimated' / 'none' hull modes inherit the loader's
+ * centering offset on group.position; resetting position to (0,0,0) then
+ * leaves the mesh wherever its raw vertex coords happened to be — usually
+ * far from the joint, looking like a load failure.
+ */
+function yieldToUI(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+
+// ─── Disposal helper ──────────────────────────────────────────
+
+function disposeSubtree(group: THREE.Object3D): void {
+  group.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.geometry?.dispose();
+      const m = child.material;
+      if (Array.isArray(m)) m.forEach(x => x.dispose()); else m?.dispose();
+    }
+  });
+}
 
 // ─── Sizable component helpers ─────────────────────────────────
 

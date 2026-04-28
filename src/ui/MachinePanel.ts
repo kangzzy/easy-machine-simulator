@@ -4,6 +4,9 @@ import { supportsDimensions, type ComponentType, type MachineComponent } from '.
 import type { MeshHullMode } from '../types/deployment';
 import { makeCollapsiblePanel } from './panelUtils';
 
+const RAD2DEG = 180 / Math.PI;
+const DEG2RAD = Math.PI / 180;
+
 const COMP_TYPES: { type: ComponentType; icon: string; label: string; color: string }[] = [
   { type: 'linear-axis', icon: '\u2194', label: 'Linear Axis', color: '#6af' },
   { type: 'rotary-axis', icon: '\u21BB', label: 'Rotary Axis', color: '#fa6' },
@@ -416,10 +419,16 @@ export class MachinePanel {
       { v: 'fixed', l: 'Fixed' }, { v: 'prismatic', l: 'Prismatic' }, { v: 'revolute', l: 'Revolute' },
     ], (v) => this.engine.updateMachineComponent(comp.id, { jointType: v as any })));
 
-    // Joint limits (only for non-fixed joints)
+    // Joint limits (only for non-fixed joints) — revolute shown in degrees
     if (comp.jointType !== 'fixed') {
       const isPris = comp.jointType === 'prismatic';
-      ed.appendChild(this.sectionLabel(`Limits (${isPris ? 'mm' : 'rad'})`));
+      const unit = isPris ? 'mm' : '\u00B0';
+      const toDisp = (v: number) => isPris ? v : v * RAD2DEG;
+      const toStor = (v: number) => isPris ? v : v * DEG2RAD;
+      const decimals = isPris ? 1 : 1;
+      const step = isPris ? '1' : '1';
+
+      ed.appendChild(this.sectionLabel(`Limits (${unit})`));
       const limRow = document.createElement('div');
       limRow.style.cssText = 'display:flex;gap:6px;';
 
@@ -430,12 +439,13 @@ export class MachinePanel {
       minLbl.textContent = 'Min';
       const minIn = document.createElement('input');
       minIn.type = 'number';
-      minIn.value = comp.limits.min.toFixed(isPris ? 1 : 3);
-      minIn.step = isPris ? '1' : '0.1';
+      minIn.value = toDisp(comp.limits.min).toFixed(decimals);
+      minIn.step = step;
       minIn.style.cssText = 'width:100%;background:var(--input-bg);border:1px solid #f6640030;border-radius:3px;color:var(--text-primary);padding:3px 4px;font-size:11px;font-family:monospace;text-align:center;';
       minIn.addEventListener('change', () => {
-        this.engine.updateMachineComponent(comp.id, { limits: { min: parseFloat(minIn.value) || 0, max: comp.limits.max } });
-        comp.limits.min = parseFloat(minIn.value) || 0;
+        const stored = toStor(parseFloat(minIn.value) || 0);
+        this.engine.updateMachineComponent(comp.id, { limits: { min: stored, max: comp.limits.max } });
+        comp.limits.min = stored;
       });
       minWrap.append(minLbl, minIn);
 
@@ -446,12 +456,13 @@ export class MachinePanel {
       maxLbl.textContent = 'Max';
       const maxIn = document.createElement('input');
       maxIn.type = 'number';
-      maxIn.value = comp.limits.max.toFixed(isPris ? 1 : 3);
-      maxIn.step = isPris ? '1' : '0.1';
+      maxIn.value = toDisp(comp.limits.max).toFixed(decimals);
+      maxIn.step = step;
       maxIn.style.cssText = 'width:100%;background:var(--input-bg);border:1px solid #6f640030;border-radius:3px;color:var(--text-primary);padding:3px 4px;font-size:11px;font-family:monospace;text-align:center;';
       maxIn.addEventListener('change', () => {
-        this.engine.updateMachineComponent(comp.id, { limits: { min: comp.limits.min, max: parseFloat(maxIn.value) || 0 } });
-        comp.limits.max = parseFloat(maxIn.value) || 0;
+        const stored = toStor(parseFloat(maxIn.value) || 0);
+        this.engine.updateMachineComponent(comp.id, { limits: { min: comp.limits.min, max: stored } });
+        comp.limits.max = stored;
       });
       maxWrap.append(maxLbl, maxIn);
 

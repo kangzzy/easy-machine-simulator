@@ -6,8 +6,12 @@ export interface RendererResult {
 }
 
 export async function createRenderer(canvas: HTMLCanvasElement): Promise<RendererResult> {
-  // Try WebGPU first
-  if ('gpu' in navigator) {
+  // WebGPU is intentionally disabled: Three.js v0.172 WebGPURenderer crashes with
+  // "Cannot read properties of undefined (reading 'usedTimes')" inside its pipeline
+  // cache when materials are disposed/recreated during preset reloads (case loading).
+  // WebGL2 has stable dispose semantics for this workload.
+  const FORCE_WEBGL2 = true;
+  if (!FORCE_WEBGL2 && 'gpu' in navigator) {
     try {
       const adapter = await (navigator as any).gpu.requestAdapter();
       if (adapter) {

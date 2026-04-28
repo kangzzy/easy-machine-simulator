@@ -21,6 +21,12 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
+    watch: {
+      // Native inotify doesn't fire for host edits on Windows+Docker bind mounts;
+      // poll every second so HMR actually picks up source changes.
+      usePolling: true,
+      interval: 1000,
+    },
   },
   build: {
     target: 'esnext',
